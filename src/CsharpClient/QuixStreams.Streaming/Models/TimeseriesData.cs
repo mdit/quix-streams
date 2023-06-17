@@ -20,13 +20,15 @@ namespace QuixStreams.Streaming.Models
 
         private int nextIndexRawData = 0;
         private bool removedTimestamps = false;
+        private Dictionary<int, long> timestampToIndexMap = new Dictionary<int, long>();
+        private Dictionary<long, TimeseriesDataTimestamp> existingTimestamps = new Dictionary<long, TimeseriesDataTimestamp>();
 
         internal bool[] epochsIncluded;
 
         /// <summary>
         /// Create a new empty Timeseries Data instance to allow create new timestamps and parameters values from scratch
         /// </summary>
-        /// <param name="capacity">The number of timestamps that the new Timeseries Data initially store. 
+        /// <param name="capacity">The number of timestamps that the new Timeseries Data initially store.
         /// Using this parameter when you know the number of Timestamps you need to store will increase the performance of the writing.</param>
         public TimeseriesData(int capacity = 10)
         {
@@ -372,11 +374,11 @@ namespace QuixStreams.Streaming.Models
                     dupeList.Add(index);
                 }
             }
-            
+
             if (dupes.Count == 0) return;
 
-            var uniqueTimestamps = new Dictionary<(long, long), int>();            
-            
+            var uniqueTimestamps = new Dictionary<(long, long), int>();
+
             foreach (var timestamp in dupes)
             {
                 foreach (var index in timestamp.Value)
@@ -493,12 +495,40 @@ namespace QuixStreams.Streaming.Models
         /// <summary>
         /// Starts adding a new set of parameter values at the given timestamp.
         /// </summary>
+        /// <param name="dateTime">The datetime to use for adding new parameter values</param>
+        /// <returns>Timeseries data to add parameter values at the provided time</returns>
+        public TimeseriesDataTimestamp GetOrAddTimestamp(DateTime dateTime) => this.GetOrAddTimestampNanoseconds(dateTime.ToUnixNanoseconds(), true);
+
+        /// <summary>
+        /// Starts adding a new set of parameter values at the given timestamp.
+        /// </summary>
+        /// <param name="timeSpan">The time since the <see name="epochOffset"/> to add the parameter values at</param>
+        /// <returns>Timeseries data to add parameter values at the provided time</returns>
+        public TimeseriesDataTimestamp GetOrAddTimestamp(TimeSpan timeSpan) => this.GetOrAddTimestampNanoseconds(timeSpan.ToNanoseconds(), false);
+
+        /// <summary>
+        /// Starts adding a new set of parameter values at the given timestamp.
+        /// </summary>
+        /// <param name="timeMilliseconds">The time in milliseconds since the <see name="epochOffset"/> to add the parameter values at</param>
+        /// <returns>Timeseries data to add parameter values at the provided time</returns>
+        public TimeseriesDataTimestamp GetOrAddTimestampMilliseconds(long timeMilliseconds) => this.GetOrAddTimestampNanoseconds(timeMilliseconds * (long)1e6, false);
+
+        /// <summary>
+        /// Starts adding a new set of parameter values at the given timestamp.
+        /// </summary>
+        /// <param name="timeNanoseconds">The time in nanoseconds since the  <see name="epochOffset"/> to add the parameter values at</param>
+        /// <returns>Timeseries data to add parameter values at the provided time</returns>
+        public TimeseriesDataTimestamp GetOrAddTimestampNanoseconds(long timeNanoseconds) => this.GetOrAddTimestampNanoseconds(timeNanoseconds, false);
+
+        /// <summary>
+        /// Starts adding a new set of parameter values at the given timestamp.
+        /// </summary>
         /// <param name="timeNanoseconds">The time in nanoseconds since the  <see name="epoch"/> to add the parameter values at</param>
         /// <param name="epochIncluded">Epoch offset is included in the timestamp</param>
         /// <returns>Timeseries data to add parameter values at the provided time</returns>
         internal TimeseriesDataTimestamp AddTimestampNanoseconds(long timeNanoseconds, bool epochIncluded)
         {
-            var sizeNeeded = this.timestampsList.Count() + 1;
+            var sizeNeeded = this.timestampsList.Count + 1;
             this.CheckRawDataSize(sizeNeeded);
 
             this.timestampsList.Add(this.nextIndexRawData);
@@ -507,14 +537,29 @@ namespace QuixStreams.Streaming.Models
             this.epochsIncluded[this.nextIndexRawData] = epochIncluded;
 
             var newTimestamp = new TimeseriesDataTimestamp(this, this.nextIndexRawData);
+            this.existingTimestamps[timeNanoseconds] = newTimestamp;
+            this.timestampToIndexMap[this.nextIndexRawData] = timeNanoseconds;
             this.nextIndexRawData++;
 
             return newTimestamp;
         }
 
+        internal TimeseriesDataTimestamp GetOrAddTimestampNanoseconds(long timeNanoseconds, bool epochIncluded)
+        {
+            if (!existingTimestamps.TryGetValue(timeNanoseconds, out var timestamp))
+            {
+                // AddTimestampNanoseconds updates existingTimestamps.
+                timestamp = AddTimestampNanoseconds(timeNanoseconds, epochIncluded);
+            }
+            return timestamp;
+        }
+
         internal void RemoveTimestamp(int index)
         {
             this.timestampsList.RemoveAt(index);
+            var timestamp = this.timestampToIndexMap[index];
+            this.timestampToIndexMap.Remove(index);
+            this.existingTimestamps.Remove(timestamp);
             this.removedTimestamps = true;
         }
 
